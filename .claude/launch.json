@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "valgplakat-runner",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["serve", "-l", "3000", "/Users/bastiankjar/Desktop/Claude Vibe Coding/Valgplakat runner"],
+      "port": 3000
+    }
+  ]
+}

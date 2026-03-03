@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Valgplakat Runner – Kampen om Dronning Louises Bro</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <!-- Party Selection Menu -->
+    <div id="menu-screen" class="screen active">
+        <canvas id="menu-canvas"></canvas>
+        <div class="menu-content">
+            <h1 class="game-title">Valgplakat Runner</h1>
+            <h2 class="game-subtitle">Kampen om Dronning Louises Bro</h2>
+            <p class="menu-instruction">Vælg dit parti</p>
+            <div id="party-grid" class="party-grid"></div>
+            <div id="party-tooltip" class="party-tooltip"></div>
+            <p id="selected-party-text" class="selected-party-text"></p>
+            <button id="start-btn" class="start-btn" disabled>Start spil</button>
+        </div>
+    </div>
+
+    <!-- Countdown Screen -->
+    <div id="countdown-screen" class="screen">
+        <div class="countdown-content">
+            <p class="countdown-ready">Gør klar.</p>
+            <p class="countdown-sub">60 sekunder til at dominere broen.</p>
+            <div id="countdown-number" class="countdown-number"></div>
+        </div>
+    </div>
+
+    <!-- Game Canvas -->
+    <canvas id="game-canvas"></canvas>
+
+    <!-- In-Game HUD -->
+    <div id="game-hud" class="hud hidden">
+        <div class="hud-left">
+            <div class="hud-timer">
+                <span class="hud-label">Tid tilbage:</span>
+                <span id="hud-time" class="hud-value">60</span>
+            </div>
+        </div>
+        <div class="hud-center">
+            <div id="hud-party-indicator" class="hud-party-indicator"></div>
+        </div>
+        <div class="hud-right">
+            <div class="hud-score">
+                <span class="hud-label">Point</span>
+                <span id="hud-score" class="hud-value">0</span>
+            </div>
+        </div>
+        <div id="hud-controls" class="hud-controls">
+            <span>← → Løb</span>
+            <span>↑↓ Klatr</span>
+            <span>MELLEMRUM Hæng plakat</span>
+            <span class="control-warning">R Riv ned</span>
+        </div>
+    </div>
+
+    <!-- Disqualification Screen -->
+    <div id="disqualified-screen" class="screen">
+        <div class="disqualified-content">
+            <h1 class="disqualified-title">Diskvalificeret.</h1>
+            <p class="disqualified-message">Udemokratisk adfærd. Du taber.</p>
+            <button id="disqualified-restart" class="restart-btn">Prøv igen</button>
+        </div>
+    </div>
+
+    <!-- Results Screen -->
+    <div id="results-screen" class="screen">
+        <div class="results-content">
+            <h1 class="results-title">Resultat</h1>
+            <div id="results-scoreboard" class="results-scoreboard"></div>
+            <p id="results-message" class="results-message"></p>
+            <div class="results-share-row">
+                <button id="results-screenshot" class="share-btn screenshot-btn">📸 Screenshot</button>
+                <button id="results-share" class="share-btn share-link-btn">📤 Del resultat</button>
+            </div>
+            <button id="results-restart" class="restart-btn">Prøv igen</button>
+        </div>
+    </div>
+
+    <!-- Hidden canvas for screenshot generation -->
+    <canvas id="share-canvas" style="display:none;"></canvas>
+
+    <script src="js/game.js"></script>
+</body>
+</html>
