@@ -166,66 +166,51 @@ function startAmbientSound() {
     if (ambientNodes) return;
     const ac = getAudioCtx();
     const master = ac.createGain();
-    master.gain.value = 0.12;
+    master.gain.value = 0.08;
     master.connect(ac.destination);
 
-    const bufSize = ac.sampleRate * 2;
+    // === Warm tonal drone — soft chords, not noise ===
+    const droneG = ac.createGain(); droneG.gain.value = 0.25;
+    const droneFilt = ac.createBiquadFilter();
+    droneFilt.type = 'lowpass'; droneFilt.frequency.value = 400; droneFilt.Q.value = 0.3;
+    droneG.connect(droneFilt); droneFilt.connect(master);
 
-    // Urban traffic hum — low rumble of distant cars
-    const trafficBuf = ac.createBuffer(1, bufSize, ac.sampleRate);
-    const tData = trafficBuf.getChannelData(0);
-    let last = 0;
-    for (let i = 0; i < bufSize; i++) {
-        const w = Math.random() * 2 - 1;
-        last = (last + (0.02 * w)) / 1.02;
-        tData[i] = last * 3.5;
+    // Two detuned sine oscillators for a warm hum (C2 + G2)
+    const droneOscs = [];
+    const droneFreqs = [65.41, 98.00, 130.81]; // C2, G2, C3
+    for (const freq of droneFreqs) {
+        const osc = ac.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        osc.detune.value = (Math.random() - 0.5) * 8;
+        osc.connect(droneG);
+        osc.start();
+        droneOscs.push(osc);
     }
-    const traffic = ac.createBufferSource();
-    traffic.buffer = trafficBuf; traffic.loop = true;
-    const tFilt = ac.createBiquadFilter();
-    tFilt.type = 'lowpass'; tFilt.frequency.value = 180;
-    const tg = ac.createGain(); tg.gain.value = 0.7;
-    traffic.connect(tFilt); tFilt.connect(tg); tg.connect(master);
-    traffic.start();
 
-    // Crowd murmur — mid-frequency filtered noise (people chatting)
-    const murmurBuf = ac.createBuffer(1, bufSize, ac.sampleRate);
-    const mData = murmurBuf.getChannelData(0);
-    let mLast = 0;
-    for (let i = 0; i < bufSize; i++) {
-        const w = Math.random() * 2 - 1;
-        mLast = (mLast + (0.04 * w)) / 1.04;
-        mData[i] = mLast * 2;
-    }
-    const murmur = ac.createBufferSource();
-    murmur.buffer = murmurBuf; murmur.loop = true;
-    const mFilt = ac.createBiquadFilter();
-    mFilt.type = 'bandpass'; mFilt.frequency.value = 600; mFilt.Q.value = 1.5;
-    const mg = ac.createGain(); mg.gain.value = 0.15;
-    murmur.connect(mFilt); mFilt.connect(mg); mg.connect(master);
-    murmur.start();
+    // Slow LFO on drone filter for breathing effect
+    const lfo = ac.createOscillator(); lfo.frequency.value = 0.08; lfo.type = 'sine';
+    const lfoG = ac.createGain(); lfoG.gain.value = 80;
+    lfo.connect(lfoG); lfoG.connect(droneFilt.frequency);
+    lfo.start();
 
-    // Open-air wind — gentle breeze over lake
-    const windBuf = ac.createBuffer(1, bufSize, ac.sampleRate);
-    const wData = windBuf.getChannelData(0);
-    for (let i = 0; i < bufSize; i++) wData[i] = Math.random() * 2 - 1;
-    const wind = ac.createBufferSource();
-    wind.buffer = windBuf; wind.loop = true;
-    const wFilt = ac.createBiquadFilter();
-    wFilt.type = 'bandpass'; wFilt.frequency.value = 350; wFilt.Q.value = 0.3;
-    const wg = ac.createGain(); wg.gain.value = 0.2;
-    const lfo = ac.createOscillator(); lfo.frequency.value = 0.12; lfo.type = 'sine';
-    const lfoG = ac.createGain(); lfoG.gain.value = 0.1;
-    lfo.connect(lfoG); lfoG.connect(wg.gain);
-    wind.connect(wFilt); wFilt.connect(wg); wg.connect(master);
-    wind.start(); lfo.start();
+    // === Subtle city hum — very low, barely there ===
+    const humOsc = ac.createOscillator();
+    humOsc.type = 'sine'; humOsc.frequency.value = 50;
+    const humG = ac.createGain(); humG.gain.value = 0.06;
+    humOsc.connect(humG); humG.connect(master);
+    humOsc.start();
 
-    ambientNodes = { master, traffic, murmur, wind, lfo, tg, mg, wg };
+    ambientNodes = { master, droneOscs, lfo, humOsc, droneFilt };
 }
 
 function stopAmbientSound() {
     if (!ambientNodes) return;
-    try { ambientNodes.traffic.stop(); ambientNodes.murmur.stop(); ambientNodes.wind.stop(); ambientNodes.lfo.stop(); } catch(e){}
+    try {
+        ambientNodes.droneOscs.forEach(o => o.stop());
+        ambientNodes.lfo.stop();
+        ambientNodes.humOsc.stop();
+    } catch(e){}
     ambientNodes = null;
 }
 
@@ -259,7 +244,7 @@ function startBgMusic() {
 
     // Sub-bass boost (the rumble you feel from a musikanlæg)
     const subBoost = ac.createBiquadFilter();
-    subBoost.type = 'peaking'; subBoost.frequency.value = 80; subBoost.Q.value = 1.2; subBoost.gain.value = 6;
+    subBoost.type = 'peaking'; subBoost.frequency.value = 70; subBoost.Q.value = 1.0; subBoost.gain.value = 9;
     subBoost.connect(speakerFilt);
 
     const bpm = 124;
@@ -301,8 +286,8 @@ function startBgMusic() {
     }
 
     // === BASS SYNTH (bouncy, syncopated) ===
-    const bassG = ac.createGain(); bassG.gain.value = 0.4;
-    const bassFilt = ac.createBiquadFilter(); bassFilt.type = 'lowpass'; bassFilt.frequency.value = 500; bassFilt.Q.value = 2;
+    const bassG = ac.createGain(); bassG.gain.value = 0.55;
+    const bassFilt = ac.createBiquadFilter(); bassFilt.type = 'lowpass'; bassFilt.frequency.value = 450; bassFilt.Q.value = 3;
     bassG.connect(bassFilt); bassFilt.connect(subBoost);
 
     // Bass pattern: syncopated 8th notes per bar (C-G-Am-F progression)
@@ -333,7 +318,7 @@ function startBgMusic() {
 
         // --- KICK: four-on-the-floor (every beat) ---
         const kickSrc = ac.createBufferSource(); kickSrc.buffer = kickBuf;
-        const kg = ac.createGain(); kg.gain.value = 0.35;
+        const kg = ac.createGain(); kg.gain.value = 0.45;
         kickSrc.connect(kg); kg.connect(subBoost);
         kickSrc.start(t);
 
@@ -407,7 +392,7 @@ function updateBgMusic() {
     // Build energy as timer runs down — speaker opens up, bass gets heavier
     const tension = 1 - (gameTime / GAME_DURATION);
     bgMusicNodes.speakerFilt.frequency.value = 2000 + tension * 1500;
-    bgMusicNodes.subBoost.gain.value = 6 + tension * 4;
+    bgMusicNodes.subBoost.gain.value = 9 + tension * 5;
     bgMusicNodes.master.gain.value = 0.10 + tension * 0.06;
 }
 
@@ -3133,9 +3118,17 @@ function setupUI() {
     document.getElementById('results-screenshot').addEventListener('click', downloadScreenshot);
     document.getElementById('results-share').addEventListener('click', shareResult);
     // Start menu music on first interaction (AudioContext policy)
-    document.getElementById('menu-screen').addEventListener('click', () => {
-        if (!menuMusicNodes && gameState === GameState.MENU) startMenuMusic();
-    });
+    function tryStartMenuMusic() {
+        if (!menuMusicNodes && gameState === GameState.MENU) {
+            startMenuMusic();
+            document.removeEventListener('click', tryStartMenuMusic);
+            document.removeEventListener('keydown', tryStartMenuMusic);
+            document.removeEventListener('touchstart', tryStartMenuMusic);
+        }
+    }
+    document.addEventListener('click', tryStartMenuMusic);
+    document.addEventListener('keydown', tryStartMenuMusic);
+    document.addEventListener('touchstart', tryStartMenuMusic);
 }
 
 function resetToMenu() {
