@@ -1759,6 +1759,7 @@ function disqualifyPlayer() {
     playDisqualifyBuzz();
     showScreen('disqualified-screen');
     document.getElementById('game-hud').classList.add('hidden');
+    showTouchControls(false);
 }
 
 // ============== RESULTS ==============
@@ -1783,6 +1784,7 @@ function showResults() {
     else msg.textContent = 'Næste gang tager du toppen.';
     showScreen('results-screen');
     document.getElementById('game-hud').classList.add('hidden');
+    showTouchControls(false);
 }
 
 // ============== SHARE / SCREENSHOT ==============
@@ -2566,6 +2568,7 @@ function startGame() {
     gameState = GameState.PLAYING;
     showScreen(null);
     document.getElementById('game-hud').classList.remove('hidden');
+    showTouchControls(true);
     const p = PARTIES[selectedPartyIndex];
     const ind = document.getElementById('hud-party-indicator');
     ind.style.backgroundColor = p.bg; ind.style.color = p.text; ind.textContent = p.letter;
@@ -3082,6 +3085,8 @@ function updateHUD() {
 }
 
 // ============== INPUT ==============
+const isTouchDevice = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+
 function setupInput() {
     window.addEventListener('keydown', e => {
         keys[e.key] = true;
@@ -3089,6 +3094,55 @@ function setupInput() {
         if (!audioCtx) getAudioCtx();
     });
     window.addEventListener('keyup', e => { keys[e.key] = false; });
+
+    // Touch controls
+    if (isTouchDevice) {
+        setupTouchControls();
+    }
+}
+
+function setupTouchControls() {
+    // Hide keyboard hint on touch devices
+    const kbHint = document.getElementById('hud-controls');
+    if (kbHint) kbHint.style.display = 'none';
+
+    // Prevent unwanted touch behaviors on the game canvas
+    document.addEventListener('touchmove', e => {
+        if (gameState === GameState.PLAYING) e.preventDefault();
+    }, { passive: false });
+    document.addEventListener('contextmenu', e => {
+        if (gameState === GameState.PLAYING) e.preventDefault();
+    });
+
+    // Wire up all touch buttons
+    document.querySelectorAll('.touch-btn').forEach(btn => {
+        const key = btn.dataset.key;
+        if (!key) return;
+
+        btn.addEventListener('touchstart', e => {
+            e.preventDefault();
+            keys[key] = true;
+            btn.classList.add('pressed');
+            if (!audioCtx) getAudioCtx();
+        }, { passive: false });
+
+        btn.addEventListener('touchend', e => {
+            e.preventDefault();
+            keys[key] = false;
+            btn.classList.remove('pressed');
+        }, { passive: false });
+
+        btn.addEventListener('touchcancel', e => {
+            keys[key] = false;
+            btn.classList.remove('pressed');
+        });
+    });
+}
+
+function showTouchControls(show) {
+    if (!isTouchDevice) return;
+    const tc = document.getElementById('touch-controls');
+    if (tc) tc.classList.toggle('hidden', !show);
 }
 
 // ============== CANVAS ==============
@@ -3136,6 +3190,7 @@ function resetToMenu() {
     stopAmbientSound(); stopBgMusic();
     showScreen('menu-screen');
     document.getElementById('game-hud').classList.add('hidden');
+    showTouchControls(false);
     selectedPartyIndex = -1;
     document.querySelectorAll('.party-card').forEach(c => c.classList.remove('selected'));
     document.getElementById('start-btn').disabled = true;

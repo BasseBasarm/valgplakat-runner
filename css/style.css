@@ -582,6 +582,97 @@ body {
     pointer-events: none;
 }
 
+/* ============== TOUCH CONTROLS ============== */
+.touch-controls {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 20;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    padding: 0 16px calc(20px + env(safe-area-inset-bottom, 0px));
+    pointer-events: none;
+}
+
+.touch-controls.hidden {
+    display: none;
+}
+
+.touch-dpad, .touch-actions {
+    pointer-events: auto;
+}
+
+.touch-dpad {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+}
+
+.touch-dpad-mid {
+    display: flex;
+    gap: 4px;
+}
+
+.touch-btn {
+    width: 58px;
+    height: 58px;
+    border-radius: 14px;
+    border: 2px solid rgba(255,255,255,0.25);
+    background: rgba(0,0,0,0.55);
+    color: #fff;
+    font-size: 1.4rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.touch-btn:active, .touch-btn.pressed {
+    background: rgba(255,255,255,0.25);
+    border-color: rgba(255,255,255,0.5);
+}
+
+.touch-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+}
+
+.touch-action {
+    width: 76px;
+    height: 76px;
+    border-radius: 50%;
+    font-size: 1.8rem;
+    background: rgba(46,204,113,0.4);
+    border-color: rgba(46,204,113,0.6);
+}
+
+.touch-action:active, .touch-action.pressed {
+    background: rgba(46,204,113,0.65);
+    border-color: rgba(46,204,113,0.9);
+}
+
+.touch-remove {
+    width: 46px;
+    height: 46px;
+    border-radius: 50%;
+    font-size: 1rem;
+    background: rgba(231,76,60,0.3);
+    border-color: rgba(231,76,60,0.5);
+}
+
+.touch-remove:active, .touch-remove.pressed {
+    background: rgba(231,76,60,0.55);
+    border-color: rgba(231,76,60,0.8);
+}
+
 /* ============== RESPONSIVE ============== */
 @media (max-width: 768px) {
     .game-title { font-size: 1.8rem; }

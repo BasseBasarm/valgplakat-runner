@@ -2,7 +2,7 @@
 <html lang="da">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Valgplakat Runner – Kampen om Dronning Louises Bro</title>
     <link rel="stylesheet" href="css/style.css">
 </head>
@@ -78,6 +78,22 @@
                 <button id="results-share" class="share-btn share-link-btn">📤 Del resultat</button>
             </div>
             <button id="results-restart" class="restart-btn">Prøv igen</button>
+        </div>
+    </div>
+
+    <!-- Mobile Touch Controls -->
+    <div id="touch-controls" class="touch-controls hidden">
+        <div class="touch-dpad">
+            <button class="touch-btn touch-up" data-key="ArrowUp">▲</button>
+            <div class="touch-dpad-mid">
+                <button class="touch-btn touch-left" data-key="ArrowLeft">◀</button>
+                <button class="touch-btn touch-right" data-key="ArrowRight">▶</button>
+            </div>
+            <button class="touch-btn touch-down" data-key="ArrowDown">▼</button>
+        </div>
+        <div class="touch-actions">
+            <button class="touch-btn touch-action" data-key=" ">🪧</button>
+            <button class="touch-btn touch-remove" data-key="r">✕</button>
         </div>
     </div>
 
