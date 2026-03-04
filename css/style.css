@@ -43,7 +43,7 @@ body {
 
 /* ============== MENU SCREEN ============== */
 #menu-screen {
-    background: #1a1a2e;
+    background: transparent;
     overflow-y: auto;
     align-items: flex-start;
 }
@@ -63,8 +63,30 @@ body {
     text-align: center;
     max-width: 800px;
     width: 92%;
-    padding: 24px 20px 50px;
+    padding: 30px 24px 50px;
     margin: auto;
+    background: radial-gradient(ellipse at center top, rgba(15,15,30,0.75) 0%, rgba(15,15,30,0.5) 55%, transparent 100%);
+    border-radius: 24px;
+}
+
+@keyframes titleGlow {
+    0%, 100% { text-shadow: 0 2px 20px rgba(255,200,100,0.4), 0 0 60px rgba(255,180,80,0.15); }
+    50% { text-shadow: 0 2px 30px rgba(255,200,100,0.7), 0 0 80px rgba(255,180,80,0.3), 0 0 120px rgba(255,160,60,0.1); }
+}
+
+@keyframes titleFloat {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-4px); }
+}
+
+@keyframes fadeSlideUp {
+    0% { opacity: 0; transform: translateY(14px); }
+    100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes subtitleFadeIn {
+    0% { opacity: 0; transform: translateY(8px); }
+    100% { opacity: 1; transform: translateY(0); }
 }
 
 .game-title {
@@ -75,6 +97,7 @@ body {
     text-transform: uppercase;
     color: #fff;
     text-shadow: 0 2px 20px rgba(255,200,100,0.4), 0 0 60px rgba(255,180,80,0.15);
+    animation: titleGlow 4s ease-in-out infinite, titleFloat 6s ease-in-out infinite;
 }
 
 .game-subtitle {
@@ -84,6 +107,8 @@ body {
     margin-bottom: 28px;
     font-style: italic;
     text-shadow: 0 1px 8px rgba(0,0,0,0.5);
+    opacity: 0;
+    animation: subtitleFadeIn 1.2s ease-out 0.6s forwards;
 }
 
 .menu-instruction {
@@ -92,6 +117,8 @@ body {
     margin-bottom: 18px;
     font-weight: 600;
     text-shadow: 0 1px 6px rgba(0,0,0,0.4);
+    opacity: 0;
+    animation: fadeSlideUp 0.8s ease-out 1.2s forwards;
 }
 
 /* ============== PARTY GRID ============== */
@@ -100,6 +127,8 @@ body {
     grid-template-columns: repeat(6, 1fr);
     gap: 14px;
     margin-bottom: 14px;
+    opacity: 0;
+    animation: fadeSlideUp 0.8s ease-out 1.6s forwards;
 }
 
 .party-card {
@@ -235,6 +264,8 @@ body {
     transition: all 0.2s ease;
     text-transform: uppercase;
     letter-spacing: 2px;
+    opacity: 0;
+    animation: fadeSlideUp 0.8s ease-out 2.0s forwards;
 }
 
 .start-btn:disabled {

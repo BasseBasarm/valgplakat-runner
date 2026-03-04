@@ -65,6 +65,8 @@ const GameState = { MENU: 'menu', COUNTDOWN: 'countdown', PLAYING: 'playing', DI
 
 // ============== GLOBALS ==============
 let canvas, ctx;
+// Logical (CSS pixel) dimensions — updated on resize
+let logicalWidth = 0, logicalHeight = 0;
 let gameState = GameState.MENU;
 let selectedPartyIndex = -1;
 let gameTime = GAME_DURATION;
@@ -92,11 +94,13 @@ const SPICE_EVENTS = [
     { id: 'zipties', text: 'Stripsene driller.', duration: 6, icon: '🔧' },
     { id: 'paperjam', text: 'Plakaten krøller.', duration: 3, icon: '📄' },
     { id: 'police', text: 'Kommunen kigger forbi.', duration: 5, icon: '👷' },
+    { id: 'ufo', text: 'UFO stjæler en plakat!', duration: 4, icon: '🛸' },
 ];
-let activeEvent = null;         // { id, text, icon, timer, duration, postIndex? }
+let activeEvent = null;         // { id, text, icon, timer, duration, postIndex?, slotIndex?, ufoPhase?, ufoX?, ufoY?, stolenParty? }
 let eventCooldown = 0;          // seconds until next event can trigger
-let eventsThisRun = 0;          // max 2 per run
+let eventsThisRun = 0;          // exactly 2 per run
 let nextEventTime = 0;          // scheduled time for next event
+let scheduledEventTimes = [];   // pre-scheduled times for guaranteed 2 events
 
 // Pre-generated scenery
 let skylineNorrebro = [];
@@ -243,140 +247,186 @@ function startBgMusic() {
     if (bgMusicNodes) return;
     const ac = getAudioCtx();
     const master = ac.createGain();
-    master.gain.value = 0.07;
+    master.gain.value = 0.10;
     master.connect(ac.destination);
 
-    // === "Musikanlæg" — festlig party-volunteer vibe ===
+    // === Transportabelt musikanlæg — tung bass og rytme ===
 
-    // Lo-fi speaker filter — sounds like it comes from a small portable speaker
+    // Speaker character: slight resonance like a portable PA/boombox
     const speakerFilt = ac.createBiquadFilter();
-    speakerFilt.type = 'bandpass'; speakerFilt.frequency.value = 1200; speakerFilt.Q.value = 0.6;
+    speakerFilt.type = 'peaking'; speakerFilt.frequency.value = 2000; speakerFilt.Q.value = 0.8; speakerFilt.gain.value = 3;
     speakerFilt.connect(master);
 
-    // Bass line — bouncy synth bass (C-G-Am-F progression feel)
-    const bassG = ac.createGain(); bassG.gain.value = 0.35;
-    const bassFilt = ac.createBiquadFilter(); bassFilt.type = 'lowpass'; bassFilt.frequency.value = 400;
-    bassG.connect(bassFilt); bassFilt.connect(speakerFilt);
+    // Sub-bass boost (the rumble you feel from a musikanlæg)
+    const subBoost = ac.createBiquadFilter();
+    subBoost.type = 'peaking'; subBoost.frequency.value = 80; subBoost.Q.value = 1.2; subBoost.gain.value = 6;
+    subBoost.connect(speakerFilt);
 
-    // Chord pad — warm, slightly detuned for "cheap speaker" feel
-    const padG = ac.createGain(); padG.gain.value = 0.18;
-    const padFilt = ac.createBiquadFilter(); padFilt.type = 'lowpass'; padFilt.frequency.value = 1000;
-    padG.connect(padFilt); padFilt.connect(speakerFilt);
-
-    const pad1 = ac.createOscillator(); pad1.type = 'sine'; pad1.frequency.value = 261.63; // C4
-    const pad2 = ac.createOscillator(); pad2.type = 'triangle'; pad2.frequency.value = 329.63; // E4
-    const pad3 = ac.createOscillator(); pad3.type = 'sine'; pad3.frequency.value = 392.00; // G4
-    pad1.detune.value = -8; pad2.detune.value = 12; pad3.detune.value = -4;
-    pad1.connect(padG); pad2.connect(padG); pad3.connect(padG);
-    pad1.start(); pad2.start(); pad3.start();
-
-    // Rhythmic kick + snare pattern via scheduled buffer sources
-    const bpm = 118;
+    const bpm = 124;
     const beatTime = 60 / bpm;
 
-    // Kick drum buffer
-    const kickBuf = ac.createBuffer(1, ac.sampleRate * 0.2, ac.sampleRate);
+    // === HEAVY KICK DRUM (sub-bass punch) ===
+    const kickBuf = ac.createBuffer(1, ac.sampleRate * 0.25, ac.sampleRate);
     const kd = kickBuf.getChannelData(0);
     for (let i = 0; i < kd.length; i++) {
         const t = i / ac.sampleRate;
-        kd[i] = Math.sin(t * Math.PI * 2 * (150 - t * 400)) * Math.exp(-t * 18) * 0.6;
+        // Deep sub kick with pitch drop
+        kd[i] = Math.sin(t * Math.PI * 2 * (180 - t * 500)) * Math.exp(-t * 12) * 0.9
+               + Math.sin(t * Math.PI * 2 * 55) * Math.exp(-t * 8) * 0.5; // sub layer
     }
 
-    // Snare buffer (noise burst)
-    const snareBuf = ac.createBuffer(1, ac.sampleRate * 0.12, ac.sampleRate);
+    // === PUNCHY SNARE (crack + body) ===
+    const snareBuf = ac.createBuffer(1, ac.sampleRate * 0.15, ac.sampleRate);
     const sd = snareBuf.getChannelData(0);
     for (let i = 0; i < sd.length; i++) {
         const t = i / ac.sampleRate;
-        sd[i] = (Math.random() * 2 - 1) * Math.exp(-t * 25) * 0.3;
+        sd[i] = (Math.random() * 2 - 1) * Math.exp(-t * 20) * 0.5  // noise body
+              + Math.sin(t * Math.PI * 2 * 200) * Math.exp(-t * 40) * 0.35; // tonal crack
     }
 
-    // Hihat buffer (short noise)
-    const hhBuf = ac.createBuffer(1, ac.sampleRate * 0.04, ac.sampleRate);
+    // === CRISP HIHAT ===
+    const hhBuf = ac.createBuffer(1, ac.sampleRate * 0.05, ac.sampleRate);
     const hd = hhBuf.getChannelData(0);
     for (let i = 0; i < hd.length; i++) {
         const t = i / ac.sampleRate;
-        hd[i] = (Math.random() * 2 - 1) * Math.exp(-t * 80) * 0.15;
+        hd[i] = (Math.random() * 2 - 1) * Math.exp(-t * 60) * 0.2;
     }
 
-    // Bass note sequence (simple C-G-A-F pattern, one note per bar)
-    const bassNotes = [130.81, 196.00, 220.00, 174.61]; // C3, G3, A3, F3
+    // === OPEN HIHAT ===
+    const ohBuf = ac.createBuffer(1, ac.sampleRate * 0.15, ac.sampleRate);
+    const ohd = ohBuf.getChannelData(0);
+    for (let i = 0; i < ohd.length; i++) {
+        const t = i / ac.sampleRate;
+        ohd[i] = (Math.random() * 2 - 1) * Math.exp(-t * 12) * 0.12;
+    }
 
-    // Schedule 16 bars of rhythm (enough for 60s game)
-    let scheduleTime = ac.currentTime + 0.1;
-    const totalBeats = Math.ceil(GAME_DURATION / beatTime) + 8;
+    // === BASS SYNTH (bouncy, syncopated) ===
+    const bassG = ac.createGain(); bassG.gain.value = 0.4;
+    const bassFilt = ac.createBiquadFilter(); bassFilt.type = 'lowpass'; bassFilt.frequency.value = 500; bassFilt.Q.value = 2;
+    bassG.connect(bassFilt); bassFilt.connect(subBoost);
+
+    // Bass pattern: syncopated 8th notes per bar (C-G-Am-F progression)
+    // Each sub-array is 8 eighth-note slots per bar (0=rest)
+    const bassPatterns = [
+        [130.81, 0, 130.81, 130.81, 0, 130.81, 0, 130.81], // C
+        [196.00, 0, 196.00, 196.00, 0, 196.00, 0, 196.00], // G
+        [110.00, 0, 110.00, 110.00, 0, 110.00, 0, 110.00], // Am
+        [174.61, 0, 174.61, 174.61, 0, 174.61, 0, 174.61], // F
+    ];
+
+    // === CHORD STABS (short punchy, not droning) ===
+    const chordNotes = [
+        [261.63, 329.63, 392.00], // C
+        [196.00, 246.94, 293.66], // G (low voicing)
+        [220.00, 261.63, 329.63], // Am
+        [174.61, 220.00, 261.63], // F
+    ];
+
+    // Schedule everything
+    const startTime = ac.currentTime + 0.1;
+    const totalBeats = Math.ceil(GAME_DURATION / beatTime) + 16;
+
     for (let beat = 0; beat < totalBeats; beat++) {
-        const t = scheduleTime + beat * beatTime;
+        const t = startTime + beat * beatTime;
         const bar = Math.floor(beat / 4);
         const beatInBar = beat % 4;
 
-        // Kick on beats 1 and 3
-        if (beatInBar === 0 || beatInBar === 2) {
-            const kickSrc = ac.createBufferSource(); kickSrc.buffer = kickBuf;
-            const kg = ac.createGain(); kg.gain.value = 0.25;
-            kickSrc.connect(kg); kg.connect(speakerFilt);
-            kickSrc.start(t);
-        }
+        // --- KICK: four-on-the-floor (every beat) ---
+        const kickSrc = ac.createBufferSource(); kickSrc.buffer = kickBuf;
+        const kg = ac.createGain(); kg.gain.value = 0.35;
+        kickSrc.connect(kg); kg.connect(subBoost);
+        kickSrc.start(t);
 
-        // Snare on beats 2 and 4
+        // --- SNARE: beats 2 and 4 ---
         if (beatInBar === 1 || beatInBar === 3) {
             const snareSrc = ac.createBufferSource(); snareSrc.buffer = snareBuf;
-            const sg = ac.createGain(); sg.gain.value = 0.15;
+            const sg = ac.createGain(); sg.gain.value = 0.25;
             snareSrc.connect(sg); sg.connect(speakerFilt);
             snareSrc.start(t);
         }
 
-        // Hihat on every beat + offbeat
-        const hhSrc = ac.createBufferSource(); hhSrc.buffer = hhBuf;
-        const hg = ac.createGain(); hg.gain.value = 0.10;
-        hhSrc.connect(hg); hg.connect(speakerFilt);
-        hhSrc.start(t);
+        // --- HIHAT: every 8th note ---
+        for (let eighth = 0; eighth < 2; eighth++) {
+            const ht = t + eighth * beatTime * 0.5;
+            const isOffbeat = eighth === 1;
+            // Open hihat on offbeat of beat 2 and 4
+            if (isOffbeat && (beatInBar === 1 || beatInBar === 3)) {
+                const ohSrc = ac.createBufferSource(); ohSrc.buffer = ohBuf;
+                const og = ac.createGain(); og.gain.value = 0.12;
+                ohSrc.connect(og); og.connect(speakerFilt);
+                ohSrc.start(ht);
+            } else {
+                const hhSrc = ac.createBufferSource(); hhSrc.buffer = hhBuf;
+                const hg = ac.createGain(); hg.gain.value = isOffbeat ? 0.08 : 0.14;
+                hhSrc.connect(hg); hg.connect(speakerFilt);
+                hhSrc.start(ht);
+            }
+        }
 
-        // Offbeat hihat
-        const hhSrc2 = ac.createBufferSource(); hhSrc2.buffer = hhBuf;
-        const hg2 = ac.createGain(); hg2.gain.value = 0.06;
-        hhSrc2.connect(hg2); hg2.connect(speakerFilt);
-        hhSrc2.start(t + beatTime * 0.5);
+        // --- BASS: syncopated pattern (8th notes) ---
+        const bassLine = bassPatterns[bar % 4];
+        for (let eighth = 0; eighth < 2; eighth++) {
+            const slot = beatInBar * 2 + eighth;
+            const freq = bassLine[slot];
+            if (freq > 0) {
+                const bt = t + eighth * beatTime * 0.5;
+                const bassOsc = ac.createOscillator();
+                bassOsc.type = 'sawtooth';
+                bassOsc.frequency.value = freq;
+                const bg = ac.createGain();
+                bg.gain.setValueAtTime(0.35, bt);
+                bg.gain.exponentialRampToValueAtTime(0.001, bt + beatTime * 0.45);
+                bassOsc.connect(bg); bg.connect(bassG);
+                bassOsc.start(bt); bassOsc.stop(bt + beatTime * 0.5);
+            }
+        }
 
-        // Bass note — one per bar, on beat 1
-        if (beatInBar === 0) {
-            const bassOsc = ac.createOscillator();
-            bassOsc.type = 'sawtooth';
-            bassOsc.frequency.value = bassNotes[bar % bassNotes.length];
-            const bg = ac.createGain();
-            bg.gain.setValueAtTime(0.25, t);
-            bg.gain.exponentialRampToValueAtTime(0.001, t + beatTime * 3.5);
-            bassOsc.connect(bg); bg.connect(bassG);
-            bassOsc.start(t); bassOsc.stop(t + beatTime * 4);
+        // --- CHORD STABS: short stabs on beat 1 and the "and" of beat 2 ---
+        if (beatInBar === 0 || (beatInBar === 1)) {
+            const stabTime = beatInBar === 0 ? t : t + beatTime * 0.5; // "and" of 2
+            const chord = chordNotes[bar % 4];
+            for (let v = 0; v < 3; v++) {
+                const osc = ac.createOscillator();
+                osc.type = v === 0 ? 'square' : 'sawtooth';
+                osc.frequency.value = chord[v] * 2; // octave up for brightness
+                osc.detune.value = [-6, 10, -4][v];
+                const cg = ac.createGain();
+                cg.gain.setValueAtTime(0.06, stabTime);
+                cg.gain.exponentialRampToValueAtTime(0.001, stabTime + 0.12);
+                osc.connect(cg); cg.connect(speakerFilt);
+                osc.start(stabTime); osc.stop(stabTime + 0.15);
+            }
         }
     }
 
-    bgMusicNodes = { master, pad1, pad2, pad3, padG, padFilt, speakerFilt, scheduleStart: ac.currentTime };
+    bgMusicNodes = { master, speakerFilt, subBoost, bassFilt, scheduleStart: ac.currentTime };
 }
 
 function updateBgMusic() {
     if (!bgMusicNodes) return;
-    // Build energy as timer runs down — filter opens, volume rises
+    // Build energy as timer runs down — speaker opens up, bass gets heavier
     const tension = 1 - (gameTime / GAME_DURATION);
-    const freq = 1000 + tension * 800; // speaker filter opens with urgency
-    bgMusicNodes.padFilt.frequency.value = freq;
-    bgMusicNodes.speakerFilt.frequency.value = 1200 + tension * 600;
-    bgMusicNodes.master.gain.value = 0.07 + tension * 0.05;
+    bgMusicNodes.speakerFilt.frequency.value = 2000 + tension * 1500;
+    bgMusicNodes.subBoost.gain.value = 6 + tension * 4;
+    bgMusicNodes.master.gain.value = 0.10 + tension * 0.06;
 }
 
 function stopBgMusic() {
     if (!bgMusicNodes) return;
-    try { bgMusicNodes.pad1.stop(); bgMusicNodes.pad2.stop(); bgMusicNodes.pad3.stop(); } catch(e){}
-    bgMusicNodes = null;
+    try {
+        bgMusicNodes.master.gain.linearRampToValueAtTime(0, getAudioCtx().currentTime + 0.3);
+    } catch(e) {}
+    setTimeout(() => { bgMusicNodes = null; }, 400);
 }
 
 // ============== 2D COORDINATE HELPERS ==============
 // World X → screen X (with camera)
 function wx(worldX) {
-    return worldX - cameraX + canvas.width / 2;
+    return worldX - cameraX + logicalWidth / 2;
 }
 // Bridge deck screen Y
 function bridgeY() {
-    return canvas.height * BRIDGE_Y;
+    return logicalHeight * BRIDGE_Y;
 }
 // Screen position for a character or object on the bridge
 function worldToScreen(worldX, heightAboveBridge = 0) {
@@ -1078,7 +1128,7 @@ class BgEntity {
 
     draw() {
         const sx = wx(this.worldX);
-        if (sx < -60 || sx > canvas.width + 60) return;
+        if (sx < -60 || sx > logicalWidth + 60) return;
         const by = bridgeY();
         // Vertical offset based on lane (near/far feel via slight Y shift)
         const yOff = -4 + this.lane * 8;
@@ -1213,7 +1263,7 @@ class Bird {
     }
     draw() {
         const sx = wx(this.worldX);
-        if (sx < -30 || sx > canvas.width + 30) return;
+        if (sx < -30 || sx > logicalWidth + 30) return;
         const s = this.size;
         ctx.globalAlpha = 0.4;
         ctx.strokeStyle = '#3A3A3A';
@@ -1300,22 +1350,22 @@ function drawWorld() {
     skyGrad.addColorStop(0.75, '#E8C8A0');
     skyGrad.addColorStop(1, '#D8C0A0');
     ctx.fillStyle = skyGrad;
-    ctx.fillRect(0, 0, canvas.width, skyH);
+    ctx.fillRect(0, 0, logicalWidth, skyH);
 
     // Subtle sun glow near horizon
-    const sunX = canvas.width * 0.7;
+    const sunX = logicalWidth * 0.7;
     const sunY = skyH - 20;
     const sunGlow = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, 180);
     sunGlow.addColorStop(0, 'rgba(255,220,160,0.25)');
     sunGlow.addColorStop(0.5, 'rgba(255,200,140,0.08)');
     sunGlow.addColorStop(1, 'rgba(255,200,140,0)');
     ctx.fillStyle = sunGlow;
-    ctx.fillRect(0, 0, canvas.width, skyH);
+    ctx.fillRect(0, 0, logicalWidth, skyH);
 
     // Clouds — warmer tones
     const ct = Date.now() * 0.00002;
     for (let i = 0; i < 10; i++) {
-        const cx = ((i * 180 + ct * 500) % (canvas.width + 500)) - 250;
+        const cx = ((i * 180 + ct * 500) % (logicalWidth + 500)) - 250;
         const cy = 15 + (i % 4) * 28;
         const cloudAlpha = 0.2 + (i % 3) * 0.05;
         ctx.fillStyle = `rgba(255,240,220,${cloudAlpha})`;
@@ -1347,11 +1397,11 @@ function drawWorld() {
 function drawSkylineSection(buildings, parallax, baseY) {
     ctx.globalAlpha = 0.5;
     for (const b of buildings) {
-        const sx = b.x - cameraX * parallax + (canvas.width/2 - cameraX * (1 - parallax));
+        const sx = b.x - cameraX * parallax + (logicalWidth/2 - cameraX * (1 - parallax));
         // Simplified: just offset from camera
-        const screenX = wx(b.x) * parallax + (1 - parallax) * (b.x - cameraX * parallax + canvas.width * 0.1);
+        const screenX = wx(b.x) * parallax + (1 - parallax) * (b.x - cameraX * parallax + logicalWidth * 0.1);
         const finalX = b.x - cameraX * parallax;
-        if (finalX + b.w < -100 || finalX > canvas.width + 100) continue;
+        if (finalX + b.w < -100 || finalX > logicalWidth + 100) continue;
 
         ctx.fillStyle = b.color;
         ctx.fillRect(finalX, baseY - b.h, b.w, b.h);
@@ -1393,7 +1443,7 @@ function drawTrees(baseY) {
     ctx.globalAlpha = 0.35;
     for (let i = 0; i < 30; i++) {
         const tx = i * 110 + 20 - cameraX * 0.15;
-        if (tx < -25 || tx > canvas.width + 25) continue;
+        if (tx < -25 || tx > logicalWidth + 25) continue;
         const ty = baseY - 2 + Math.sin(i * 2.3) * 4;
         ctx.fillStyle = '#4A6A3A';
         ctx.beginPath(); ctx.arc(tx, ty - 14, 10 + Math.sin(i)*2, 0, Math.PI*2); ctx.fill();
@@ -1407,21 +1457,21 @@ function drawTrees(baseY) {
 
 function drawWater(waterY) {
     // Water fills below bridge — warmer, richer tones
-    const waterGrad = ctx.createLinearGradient(0, waterY, 0, canvas.height);
+    const waterGrad = ctx.createLinearGradient(0, waterY, 0, logicalHeight);
     waterGrad.addColorStop(0, '#6A94A8');
     waterGrad.addColorStop(0.2, '#5A8898');
     waterGrad.addColorStop(0.5, '#4A7888');
     waterGrad.addColorStop(1, '#2A5A70');
     ctx.fillStyle = waterGrad;
-    ctx.fillRect(0, waterY, canvas.width, canvas.height - waterY);
+    ctx.fillRect(0, waterY, logicalWidth, logicalHeight - waterY);
 
     // Bridge piers in water
     for (const px of bridgePiers) {
         const sx = wx(px);
-        if (sx < -30 || sx > canvas.width + 30) continue;
+        if (sx < -30 || sx > logicalWidth + 30) continue;
         // Stone pier
         ctx.fillStyle = '#8A8878';
-        ctx.fillRect(sx - 12, waterY - 5, 24, canvas.height - waterY + 10);
+        ctx.fillRect(sx - 12, waterY - 5, 24, logicalHeight - waterY + 10);
         // Pier cap
         ctx.fillStyle = '#9A9888';
         ctx.fillRect(sx - 15, waterY - 5, 30, 8);
@@ -1441,7 +1491,7 @@ function drawWater(waterY) {
     ctx.globalAlpha = 0.12;
     ctx.fillStyle = '#8AC0D8';
     for (let i = 0; i < 50; i++) {
-        const rx = ((i * 75 + t * 12) % (canvas.width + 60)) - 30;
+        const rx = ((i * 75 + t * 12) % (logicalWidth + 60)) - 30;
         const ry = waterY + 15 + (i % 10) * 18 + Math.sin(t * 0.7 + i * 0.6) * 4;
         ctx.fillRect(rx, ry, 20 + Math.sin(t + i * 0.4) * 8, 1.5);
     }
@@ -1449,7 +1499,7 @@ function drawWater(waterY) {
 
     // Swans (2-3 floating)
     for (let i = 0; i < 3; i++) {
-        const swX = ((i * 400 + t * 8) % (canvas.width + 200)) - 100;
+        const swX = ((i * 400 + t * 8) % (logicalWidth + 200)) - 100;
         const swY = waterY + 30 + i * 25 + Math.sin(t * 0.5 + i) * 3;
         ctx.fillStyle = '#fff';
         ctx.globalAlpha = 0.35;
@@ -1656,7 +1706,7 @@ function drawStreetExtension(by, edgeX, side) {
 
     // Fill below road to bottom of screen (ground / basement)
     ctx.fillStyle = '#4A4840';
-    ctx.fillRect(x0, by + 16, x1 - x0, canvas.height - by);
+    ctx.fillRect(x0, by + 16, x1 - x0, logicalHeight - by);
 }
 
 // ============== CLIMBING INDICATOR ==============
@@ -1897,16 +1947,185 @@ function showScreen(id) { document.querySelectorAll('.screen').forEach(s => s.cl
 
 // ============== MENU BACKGROUND ==============
 let menuCanvas, menuCtx, menuAnimId;
+let menuTime = 0, menuLastTs = 0;
+let menuMusicNodes = null;
+let menuEntities = { stars: [], birds: [], silhouettes: [], cyclists: [], swans: [], particles: [], windows: [] };
+
 function setupMenuCanvas() {
     menuCanvas = document.getElementById('menu-canvas');
     menuCtx = menuCanvas.getContext('2d');
-    function resize() { menuCanvas.width = window.innerWidth; menuCanvas.height = window.innerHeight; }
+    function resize() {
+        const dpr = window.devicePixelRatio || 1;
+        menuCanvas.width = window.innerWidth * dpr;
+        menuCanvas.height = window.innerHeight * dpr;
+        menuCanvas.style.width = window.innerWidth + 'px';
+        menuCanvas.style.height = window.innerHeight + 'px';
+        menuCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        initMenuWindows(); // rebuild windows on resize
+    }
     resize();
     window.addEventListener('resize', resize);
+    initMenuEntities();
 }
 
+// ============== MENU ENTITIES ==============
+function initMenuEntities() {
+    const w = window.innerWidth, h = window.innerHeight;
+    const by = h * 0.68;
+
+    // Twinkling stars
+    menuEntities.stars = [];
+    for (let i = 0; i < 50; i++) {
+        menuEntities.stars.push({
+            x: Math.random() * w, y: Math.random() * (by * 0.45),
+            twinklePhase: Math.random() * Math.PI * 2,
+            twinkleSpeed: 0.5 + Math.random() * 2.5,
+            baseAlpha: 0.15 + Math.random() * 0.35,
+            size: 1 + Math.random() * 1.5,
+        });
+    }
+
+    // Birds
+    menuEntities.birds = [];
+    for (let i = 0; i < 6; i++) {
+        menuEntities.birds.push({
+            x: Math.random() * w, y: 20 + Math.random() * (by * 0.35),
+            speed: 25 + Math.random() * 40,
+            wingPhase: Math.random() * Math.PI * 2,
+            size: 0.4 + Math.random() * 0.3,
+        });
+    }
+
+    // Silhouettes (people running with posters)
+    menuEntities.silhouettes = [];
+    for (let i = 0; i < 3; i++) {
+        menuEntities.silhouettes.push({
+            x: Math.random() * w,
+            speed: 35 + Math.random() * 35,
+            dir: Math.random() < 0.5 ? 1 : -1,
+            partyIndex: Math.floor(Math.random() * PARTIES.length),
+            animPhase: Math.random() * Math.PI * 2,
+            scale: 0.65 + Math.random() * 0.25,
+        });
+    }
+
+    // Cyclists
+    menuEntities.cyclists = [];
+    for (let i = 0; i < 2; i++) {
+        menuEntities.cyclists.push({
+            x: w * 0.3 + Math.random() * w * 0.4,
+            speed: 70 + Math.random() * 50,
+            dir: i === 0 ? 1 : -1,
+            wheelPhase: Math.random() * Math.PI * 2,
+        });
+    }
+
+    // Swans
+    menuEntities.swans = [];
+    for (let i = 0; i < 2; i++) {
+        menuEntities.swans.push({
+            x: w * 0.25 + i * w * 0.45,
+            y: by + 28 + i * 18,
+            speed: 5 + Math.random() * 8,
+            dir: i === 0 ? 1 : -1,
+            neckPhase: Math.random() * Math.PI * 2,
+            bobPhase: Math.random() * Math.PI * 2,
+        });
+    }
+
+    // Floating particles (poster scraps / leaves)
+    menuEntities.particles = [];
+    const colors = ['#C08060','#D0A070','#A06040','#E8C8A0','#C60C30','#005DAA','#2E8B57','#F2C300'];
+    for (let i = 0; i < 15; i++) {
+        menuEntities.particles.push({
+            x: Math.random() * w, y: Math.random() * h,
+            vx: -8 + Math.random() * 16,
+            vy: 6 + Math.random() * 12,
+            rotation: Math.random() * Math.PI * 2,
+            rotSpeed: (Math.random() - 0.5) * 2,
+            size: 2 + Math.random() * 3.5,
+            color: colors[Math.floor(Math.random() * colors.length)],
+            alpha: 0.12 + Math.random() * 0.18,
+            swayPhase: Math.random() * Math.PI * 2,
+        });
+    }
+
+    initMenuWindows();
+}
+
+function initMenuWindows() {
+    const w = window.innerWidth, h = window.innerHeight;
+    const by = h * 0.68;
+    menuEntities.windows = [];
+    let bx = 0;
+    while (bx < w) {
+        const bw = 25 + Math.sin(bx * 0.1) * 15 + 15;
+        const bh = 30 + Math.sin(bx * 0.07 + 1) * 25 + 20;
+        for (let wy = by - bh; wy < by - 5; wy += 12) {
+            for (let wx = bx + 3; wx < bx + bw - 5; wx += 9) {
+                menuEntities.windows.push({
+                    wx, wy,
+                    isLit: ((wx * 7 + wy * 13) % 10) > 3, // deterministic pseudo-random
+                    flickerPhase: (wx * 3.7 + wy * 2.3) % (Math.PI * 2),
+                    flickerSpeed: 0.3 + ((wx * 5 + wy * 3) % 10) * 0.15,
+                    brightness: 0.5 + ((wx * 11 + wy * 7) % 10) * 0.05,
+                });
+            }
+        }
+        bx += bw + 1;
+    }
+}
+
+function updateMenuEntities(dt) {
+    const w = window.innerWidth, h = window.innerHeight;
+    const by = h * 0.68;
+
+    // Birds
+    for (const b of menuEntities.birds) {
+        b.x += b.speed * dt;
+        b.wingPhase += dt * 8;
+        if (b.x > w + 40) { b.x = -40; b.y = 20 + Math.random() * (by * 0.35); }
+    }
+
+    // Silhouettes
+    for (const s of menuEntities.silhouettes) {
+        s.x += s.speed * s.dir * dt;
+        s.animPhase += dt * 7;
+        if (s.x > w + 60) { s.x = -60; s.partyIndex = Math.floor(Math.random() * PARTIES.length); }
+        if (s.x < -60) { s.x = w + 60; s.partyIndex = Math.floor(Math.random() * PARTIES.length); }
+    }
+
+    // Cyclists
+    for (const cy of menuEntities.cyclists) {
+        cy.x += cy.speed * cy.dir * dt;
+        cy.wheelPhase += dt * 12;
+        if (cy.x > w + 70) cy.x = -70;
+        if (cy.x < -70) cy.x = w + 70;
+    }
+
+    // Swans
+    for (const sw of menuEntities.swans) {
+        sw.x += sw.speed * sw.dir * dt;
+        sw.neckPhase += dt * 0.8;
+        sw.bobPhase += dt * 1.2;
+        if (sw.x > w + 40) sw.dir = -1;
+        if (sw.x < -40) sw.dir = 1;
+    }
+
+    // Particles
+    for (const p of menuEntities.particles) {
+        p.x += p.vx * dt + Math.sin(menuTime + p.swayPhase) * 6 * dt;
+        p.y += p.vy * dt;
+        p.rotation += p.rotSpeed * dt;
+        if (p.y > h + 10) { p.y = -10; p.x = Math.random() * w; }
+        if (p.x > w + 20) p.x = -20;
+        if (p.x < -20) p.x = w + 20;
+    }
+}
+
+// ============== MENU BACKGROUND DRAWING ==============
 function drawMenuBackground() {
-    const c = menuCtx, w = menuCanvas.width, h = menuCanvas.height;
+    const c = menuCtx, w = window.innerWidth, h = window.innerHeight;
     const by = h * 0.68;
 
     // Sky — dusk gradient
@@ -1928,14 +2147,38 @@ function drawMenuBackground() {
     c.fillStyle = sg;
     c.fillRect(0, 0, w, by);
 
-    // Stars (faint)
-    c.fillStyle = 'rgba(255,255,255,0.3)';
-    for (let i = 0; i < 40; i++) {
-        const sx = (i * 137.5 + 50) % w, sy = (i * 73.3 + 10) % (by * 0.5);
-        c.fillRect(sx, sy, 1.5, 1.5);
+    // Twinkling stars
+    for (const star of menuEntities.stars) {
+        const twinkle = Math.sin(menuTime * star.twinkleSpeed + star.twinklePhase);
+        const alpha = star.baseAlpha + twinkle * 0.2;
+        if (alpha < 0.05) continue;
+        c.fillStyle = `rgba(255,255,240,${alpha.toFixed(2)})`;
+        c.beginPath();
+        c.arc(star.x, star.y, star.size, 0, Math.PI * 2);
+        c.fill();
+        // Cross-sparkle for bright stars
+        if (alpha > 0.4) {
+            c.fillRect(star.x - star.size * 2.5, star.y - 0.4, star.size * 5, 0.8);
+            c.fillRect(star.x - 0.4, star.y - star.size * 2.5, 0.8, star.size * 5);
+        }
     }
 
-    // Skyline silhouettes
+    // Birds
+    for (const bird of menuEntities.birds) {
+        const s = bird.size;
+        c.globalAlpha = 0.3;
+        c.strokeStyle = '#2A2A3A';
+        c.lineWidth = 1.2 * s;
+        const wing = Math.sin(bird.wingPhase) * 5 * s;
+        c.beginPath();
+        c.moveTo(bird.x - 8*s, bird.y + wing);
+        c.quadraticCurveTo(bird.x - 2*s, bird.y - 3*s + wing*0.3, bird.x, bird.y);
+        c.quadraticCurveTo(bird.x + 2*s, bird.y - 3*s - wing*0.3, bird.x + 8*s, bird.y - wing);
+        c.stroke();
+        c.globalAlpha = 1;
+    }
+
+    // Skyline silhouettes (buildings only — windows drawn separately)
     c.fillStyle = '#1A1A2A';
     c.globalAlpha = 0.5;
     let bx = 0;
@@ -1943,15 +2186,15 @@ function drawMenuBackground() {
         const bw = 25 + Math.sin(bx * 0.1) * 15 + 15;
         const bh = 30 + Math.sin(bx * 0.07 + 1) * 25 + 20;
         c.fillRect(bx, by - bh - 5, bw, bh + 5);
-        // Windows
-        c.fillStyle = 'rgba(255,220,120,0.15)';
-        for (let wy = by - bh; wy < by - 5; wy += 12) {
-            for (let wx = bx + 3; wx < bx + bw - 5; wx += 9) {
-                if (Math.random() > 0.4) c.fillRect(wx, wy, 4, 6);
-            }
-        }
-        c.fillStyle = '#1A1A2A';
         bx += bw + 1;
+    }
+    // Flickering windows
+    for (const win of menuEntities.windows) {
+        if (!win.isLit) continue;
+        const flicker = Math.sin(menuTime * win.flickerSpeed + win.flickerPhase);
+        const alpha = 0.10 + win.brightness * 0.08 + flicker * 0.03;
+        c.fillStyle = `rgba(255,220,120,${Math.max(0.02, alpha).toFixed(3)})`;
+        c.fillRect(win.wx, win.wy, 4, 6);
     }
     c.globalAlpha = 1;
 
@@ -1964,46 +2207,144 @@ function drawMenuBackground() {
     c.fillRect(0, by + 14, w, h - by);
 
     // Water reflections
-    const t = Date.now() * 0.0005;
+    const t = menuTime;
     c.globalAlpha = 0.08;
     c.fillStyle = '#C08060';
     for (let i = 0; i < 30; i++) {
-        const rx = ((i * 50 + t * 20) % (w + 40)) - 20;
-        const ry = by + 20 + (i % 8) * 16 + Math.sin(t * 2 + i) * 3;
-        c.fillRect(rx, ry, 15 + Math.sin(t + i) * 5, 1);
+        const rx = ((i * 50 + t * 10) % (w + 40)) - 20;
+        const ry = by + 20 + (i % 8) * 16 + Math.sin(t * 1.2 + i) * 3;
+        c.fillRect(rx, ry, 15 + Math.sin(t * 0.6 + i) * 5, 1);
     }
     c.globalAlpha = 1;
+
+    // Swans on water
+    for (const sw of menuEntities.swans) {
+        const bob = Math.sin(sw.bobPhase + menuTime) * 2;
+        c.globalAlpha = 0.4;
+        // Body
+        c.fillStyle = '#fff';
+        c.beginPath(); c.ellipse(sw.x, sw.y + bob, 10, 5, 0, 0, Math.PI * 2); c.fill();
+        // Wake ripples
+        c.globalAlpha = 0.08;
+        c.strokeStyle = '#fff'; c.lineWidth = 0.5;
+        for (let r = 0; r < 3; r++) {
+            c.beginPath();
+            c.ellipse(sw.x - (8 + r*6) * sw.dir, sw.y + bob + 2, 4 + r*3, 1.5 + r, 0, 0, Math.PI * 2);
+            c.stroke();
+        }
+        c.globalAlpha = 0.4;
+        // Neck
+        const neckSway = Math.sin(sw.neckPhase + menuTime * 0.8) * 1.5;
+        c.strokeStyle = '#fff'; c.lineWidth = 2;
+        c.beginPath();
+        c.moveTo(sw.x + 6 * sw.dir, sw.y - 3 + bob);
+        c.quadraticCurveTo(sw.x + (12 + neckSway) * sw.dir, sw.y - 14 + bob, sw.x + 8 * sw.dir, sw.y - 16 + bob);
+        c.stroke();
+        // Head
+        c.fillStyle = '#fff';
+        c.beginPath(); c.arc(sw.x + 8 * sw.dir, sw.y - 17 + bob, 2.5, 0, Math.PI * 2); c.fill();
+        // Beak
+        c.fillStyle = '#E88030';
+        c.fillRect(sw.x + (10 + neckSway * 0.3) * sw.dir, sw.y - 18 + bob, 3 * sw.dir, 2);
+        c.globalAlpha = 1;
+    }
 
     // Bridge
     c.fillStyle = '#5A5850';
     c.fillRect(0, by - 2, w, 16);
-    // Railing
     c.fillStyle = '#8A8878';
     c.fillRect(0, by - 14, w, 12);
     c.fillStyle = '#9A9888';
     c.fillRect(0, by - 15, w, 2);
-    // Railing posts
     for (let px = 20; px < w; px += 40) {
         c.fillStyle = '#7A7868';
         c.fillRect(px, by - 14, 3, 12);
     }
 
-    // Foreground lamp post with empty poster slots
+    // Silhouettes on bridge (people running with posters)
+    for (const s of menuEntities.silhouettes) {
+        const x = s.x, baseY = by - 2;
+        const sc = s.scale;
+        const party = PARTIES[s.partyIndex];
+        const legKick = Math.sin(s.animPhase) * 3 * sc;
+        c.globalAlpha = 0.35 * sc;
+        c.fillStyle = '#1A1A2A';
+        // Legs
+        c.fillRect(x - 3*sc, baseY - 3 + legKick, 2*sc, 6*sc);
+        c.fillRect(x + 1*sc, baseY - 3 - legKick, 2*sc, 6*sc);
+        // Body
+        c.fillRect(x - 5*sc, baseY - 13*sc, 10*sc, 11*sc);
+        // Head
+        c.beginPath(); c.arc(x, baseY - 17*sc, 4*sc, 0, Math.PI * 2); c.fill();
+        // Poster carried
+        c.save();
+        c.translate(x + 8*sc * s.dir, baseY - 8*sc);
+        c.rotate(0.2 * s.dir);
+        c.fillStyle = party.bg;
+        c.globalAlpha = 0.3 * sc;
+        c.fillRect(-4*sc, -10*sc, 8*sc, 14*sc);
+        // Party letter on poster
+        c.fillStyle = party.text;
+        c.globalAlpha = 0.25 * sc;
+        c.font = `bold ${Math.round(7*sc)}px Arial`;
+        c.textAlign = 'center'; c.textBaseline = 'middle';
+        c.fillText(party.letter, 0, -3*sc);
+        c.restore();
+        c.globalAlpha = 1;
+    }
+
+    // Cyclists on bridge
+    for (const cy of menuEntities.cyclists) {
+        const x = cy.x, baseY = by - 2;
+        c.globalAlpha = 0.25;
+        c.fillStyle = '#1A1A2A';
+        // Body
+        c.fillRect(x - 3, baseY - 12, 6, 8);
+        // Head
+        c.beginPath(); c.arc(x, baseY - 16, 3, 0, Math.PI * 2); c.fill();
+        // Wheels
+        c.strokeStyle = '#1A1A2A'; c.lineWidth = 1;
+        const rw = 5;
+        c.beginPath(); c.arc(x - 8 * cy.dir, baseY, rw, 0, Math.PI * 2); c.stroke();
+        c.beginPath(); c.arc(x + 8 * cy.dir, baseY, rw, 0, Math.PI * 2); c.stroke();
+        // Spokes
+        const sa = cy.wheelPhase;
+        for (let spoke = 0; spoke < 2; spoke++) {
+            const a = sa + spoke * Math.PI;
+            c.beginPath();
+            c.moveTo(x - 8*cy.dir + Math.cos(a)*rw*0.8, baseY + Math.sin(a)*rw*0.8);
+            c.lineTo(x - 8*cy.dir - Math.cos(a)*rw*0.8, baseY - Math.sin(a)*rw*0.8);
+            c.stroke();
+        }
+        c.globalAlpha = 1;
+    }
+
+    // Floating particles
+    for (const p of menuEntities.particles) {
+        c.save();
+        c.globalAlpha = p.alpha;
+        c.translate(p.x, p.y);
+        c.rotate(p.rotation);
+        c.fillStyle = p.color;
+        c.fillRect(-p.size/2, -p.size*0.7, p.size, p.size * 1.4);
+        c.restore();
+    }
+
+    // Lamp posts with pulsing glow
     const lpX = w * 0.12;
-    // Post
+    const glowPulse1 = 1 + Math.sin(menuTime * 1.5) * 0.15;
+    const glowAlpha1 = 0.15 + Math.sin(menuTime * 1.5) * 0.05;
     c.fillStyle = '#6A5420';
     c.fillRect(lpX - 3, by - 170, 6, 170);
-    // Globe
     c.fillStyle = 'rgba(255,220,140,0.25)';
     c.beginPath(); c.arc(lpX, by - 175, 12, 0, Math.PI * 2); c.fill();
     c.fillStyle = 'rgba(255,240,200,0.12)';
     c.beginPath(); c.arc(lpX, by - 175, 7, 0, Math.PI * 2); c.fill();
-    // Glow
-    const glGrad = c.createRadialGradient(lpX, by - 175, 0, lpX, by - 175, 60);
-    glGrad.addColorStop(0, 'rgba(255,220,140,0.15)');
+    const glGrad = c.createRadialGradient(lpX, by - 175, 0, lpX, by - 175, 60 * glowPulse1);
+    glGrad.addColorStop(0, `rgba(255,220,140,${glowAlpha1.toFixed(2)})`);
     glGrad.addColorStop(1, 'rgba(255,220,140,0)');
     c.fillStyle = glGrad;
-    c.beginPath(); c.arc(lpX, by - 175, 60, 0, Math.PI * 2); c.fill();
+    c.beginPath(); c.arc(lpX, by - 175, 60 * glowPulse1, 0, Math.PI * 2); c.fill();
     // Empty poster slots
     for (let i = 0; i < 4; i++) {
         const py = by - 40 - i * 32;
@@ -2014,19 +2355,21 @@ function drawMenuBackground() {
         c.setLineDash([]);
     }
 
-    // Right side lamp post
+    // Right lamp post
     const rX = w * 0.88;
+    const glowPulse2 = 1 + Math.sin(menuTime * 1.5 + 1.0) * 0.15;
+    const glowAlpha2 = 0.12 + Math.sin(menuTime * 1.5 + 1.0) * 0.04;
     c.fillStyle = '#6A5420';
     c.fillRect(rX - 3, by - 150, 6, 150);
     c.fillStyle = 'rgba(255,220,140,0.2)';
     c.beginPath(); c.arc(rX, by - 155, 10, 0, Math.PI * 2); c.fill();
-    const glGrad2 = c.createRadialGradient(rX, by - 155, 0, rX, by - 155, 50);
-    glGrad2.addColorStop(0, 'rgba(255,220,140,0.12)');
+    const glGrad2 = c.createRadialGradient(rX, by - 155, 0, rX, by - 155, 50 * glowPulse2);
+    glGrad2.addColorStop(0, `rgba(255,220,140,${glowAlpha2.toFixed(2)})`);
     glGrad2.addColorStop(1, 'rgba(255,220,140,0)');
     c.fillStyle = glGrad2;
-    c.beginPath(); c.arc(rX, by - 155, 50, 0, Math.PI * 2); c.fill();
+    c.beginPath(); c.arc(rX, by - 155, 50 * glowPulse2, 0, Math.PI * 2); c.fill();
 
-    // Overall warm overlay
+    // Warm overlay
     c.fillStyle = 'rgba(180,120,60,0.06)';
     c.fillRect(0, 0, w, h);
 
@@ -2038,13 +2381,154 @@ function drawMenuBackground() {
     c.fillRect(0, 0, w, h);
 }
 
+// ============== MENU MUSIC — Copenhagen Evening Jazz ==============
+function startMenuMusic() {
+    if (menuMusicNodes) return;
+    try {
+        const ac = getAudioCtx();
+        const master = ac.createGain();
+        master.gain.value = 0.05;
+        master.connect(ac.destination);
+
+        // Lo-fi warmth filter
+        const warmFilt = ac.createBiquadFilter();
+        warmFilt.type = 'lowpass'; warmFilt.frequency.value = 2500; warmFilt.Q.value = 0.4;
+        warmFilt.connect(master);
+
+        // === Warm Pad (held chords) ===
+        const padG = ac.createGain(); padG.gain.value = 0.12;
+        const padFilt = ac.createBiquadFilter(); padFilt.type = 'lowpass'; padFilt.frequency.value = 800; padFilt.Q.value = 0.5;
+        padG.connect(padFilt); padFilt.connect(warmFilt);
+
+        // Chord progression: Cmaj7 → Am7 → Fmaj7 → G7
+        const chords = [
+            [261.63, 329.63, 392.00, 493.88], // Cmaj7
+            [220.00, 261.63, 329.63, 392.00], // Am7
+            [174.61, 220.00, 261.63, 329.63], // Fmaj7
+            [196.00, 246.94, 293.66, 349.23], // G7
+        ];
+        const bpm = 72;
+        const beatTime = 60 / bpm;
+        const barTime = beatTime * 4;
+
+        // Create 4 pad oscillators (one per chord tone)
+        const padOscs = [];
+        for (let v = 0; v < 4; v++) {
+            const osc = ac.createOscillator();
+            osc.type = 'sine';
+            osc.frequency.value = chords[0][v];
+            osc.detune.value = [-6, 8, -3, 5][v];
+            osc.connect(padG);
+            osc.start();
+            padOscs.push(osc);
+        }
+
+        // Schedule chord changes
+        const startTime = ac.currentTime + 0.1;
+        for (let bar = 0; bar < 50; bar++) {
+            const chord = chords[bar % 4];
+            const t = startTime + bar * barTime;
+            for (let v = 0; v < 4; v++) {
+                padOscs[v].frequency.setValueAtTime(chord[v], t);
+            }
+        }
+
+        // === Walking Bass ===
+        const bassG = ac.createGain(); bassG.gain.value = 0.15;
+        const bassFilt = ac.createBiquadFilter(); bassFilt.type = 'lowpass'; bassFilt.frequency.value = 300;
+        bassG.connect(bassFilt); bassFilt.connect(warmFilt);
+
+        const bassLines = [
+            [65.41, 82.41, 98.00, 110.00],  // C2 E2 G2 A2
+            [55.00, 65.41, 82.41, 98.00],    // A1 C2 E2 G2
+            [87.31, 110.00, 65.41, 73.42],   // F2 A2 C2 D2
+            [98.00, 123.47, 73.42, 87.31],   // G2 B2 D2 F2
+        ];
+
+        for (let bar = 0; bar < 50; bar++) {
+            const line = bassLines[bar % 4];
+            for (let beat = 0; beat < 4; beat++) {
+                const t = startTime + bar * barTime + beat * beatTime;
+                const bassOsc = ac.createOscillator();
+                bassOsc.type = 'triangle';
+                bassOsc.frequency.value = line[beat];
+                const bg = ac.createGain();
+                bg.gain.setValueAtTime(0.15, t);
+                bg.gain.exponentialRampToValueAtTime(0.001, t + beatTime * 0.85);
+                bassOsc.connect(bg); bg.connect(bassG);
+                bassOsc.start(t); bassOsc.stop(t + beatTime);
+            }
+        }
+
+        // === Brush texture (soft noise on each beat) ===
+        const brushBuf = ac.createBuffer(1, ac.sampleRate * 0.06, ac.sampleRate);
+        const bd = brushBuf.getChannelData(0);
+        for (let i = 0; i < bd.length; i++) {
+            const t2 = i / ac.sampleRate;
+            bd[i] = (Math.random() * 2 - 1) * Math.exp(-t2 * 50) * 0.15;
+        }
+
+        for (let bar = 0; bar < 50; bar++) {
+            for (let beat = 0; beat < 4; beat++) {
+                const t = startTime + bar * barTime + beat * beatTime;
+                const src = ac.createBufferSource(); src.buffer = brushBuf;
+                const bg = ac.createGain();
+                bg.gain.value = (beat === 1 || beat === 3) ? 0.06 : 0.03;
+                src.connect(bg); bg.connect(warmFilt);
+                src.start(t);
+            }
+        }
+
+        // === Rhodes-like stabs on beats 2 & 4 ===
+        for (let bar = 0; bar < 50; bar++) {
+            const chord = chords[bar % 4];
+            for (let beat of [1, 3]) {
+                const t = startTime + bar * barTime + beat * beatTime;
+                for (let v = 0; v < 3; v++) {
+                    const osc = ac.createOscillator();
+                    osc.type = v === 0 ? 'sine' : 'triangle';
+                    osc.frequency.value = chord[v] * 2; // octave up
+                    osc.detune.value = [-5, 7, 3][v];
+                    const g = ac.createGain();
+                    g.gain.setValueAtTime(0.03, t);
+                    g.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+                    osc.connect(g); g.connect(warmFilt);
+                    osc.start(t); osc.stop(t + 0.4);
+                }
+            }
+        }
+
+        menuMusicNodes = { master, padOscs, padG, padFilt, warmFilt };
+    } catch(e) { console.warn('Menu music failed:', e); }
+}
+
+function stopMenuMusic() {
+    if (!menuMusicNodes) return;
+    try {
+        const ac = getAudioCtx();
+        menuMusicNodes.master.gain.linearRampToValueAtTime(0, ac.currentTime + 0.5);
+        const nodes = menuMusicNodes;
+        setTimeout(() => {
+            try { nodes.padOscs.forEach(o => o.stop()); } catch(e) {}
+        }, 600);
+    } catch(e) {}
+    menuMusicNodes = null;
+}
+
+// ============== MENU ANIMATION LOOP ==============
 function startMenuAnimation() {
-    function loop() {
+    menuTime = 0;
+    menuLastTs = performance.now();
+    function loop(ts) {
         if (gameState !== GameState.MENU) return;
+        const dt = Math.min((ts - menuLastTs) / 1000, 0.05);
+        menuLastTs = ts;
+        menuTime += dt;
+        updateMenuEntities(dt);
         drawMenuBackground();
         menuAnimId = requestAnimationFrame(loop);
     }
-    loop();
+    requestAnimationFrame(loop);
 }
 
 function stopMenuAnimation() {
@@ -2078,6 +2562,7 @@ function buildPartyGrid() {
 function startCountdown() {
     gameState = GameState.COUNTDOWN;
     stopMenuAnimation();
+    stopMenuMusic();
     showScreen('countdown-screen');
     const el = document.getElementById('countdown-number');
     el.textContent = '3'; el.style.color = '#fff';
@@ -2102,7 +2587,15 @@ function startGame() {
     shownClimbHint = false; climbHintTimer = 0;
     removeWarningActive = false; removeWarningTimer = 0;
     activeEvent = null; eventsThisRun = 0; eventCooldown = 0;
-    nextEventTime = GAME_DURATION - (15 + Math.random() * 15); // first event 15-30s in
+    // Pre-schedule exactly 2 events with guaranteed timing
+    const firstTime = GAME_DURATION - (12 + Math.random() * 10); // 12-22s in (gameTime ~48-38)
+    const secondTime = firstTime - (12 + Math.random() * 8);     // 12-20s after first
+    scheduledEventTimes = [firstTime, secondTime].filter(t => t > 5); // must leave 5s before end
+    // Ensure we always have 2 events
+    if (scheduledEventTimes.length < 2) {
+        scheduledEventTimes = [GAME_DURATION - 15, GAME_DURATION - 35];
+    }
+    nextEventTime = scheduledEventTimes.shift();
     startAmbientSound();
     startBgMusic();
     lastTimestamp = performance.now();
@@ -2114,13 +2607,19 @@ function updateSpiceEvents(dt) {
     // Active event countdown
     if (activeEvent) {
         activeEvent.timer -= dt;
+
+        // UFO animation update
+        if (activeEvent.id === 'ufo') {
+            updateUfoEvent(dt);
+        }
+
         if (activeEvent.timer <= 0) {
             activeEvent = null; // event ends
         }
         return; // only one event at a time
     }
 
-    // Check if it's time for a new event (max 2 per run)
+    // Check if it's time for a new event (exactly 2 per run)
     if (eventsThisRun >= 2) return;
     if (gameTime > nextEventTime) return; // not yet
 
@@ -2142,13 +2641,197 @@ function updateSpiceEvents(dt) {
         activeEvent.postIndex = nearest;
     }
 
+    // UFO event: pick a random occupied poster to steal
+    if (picked.id === 'ufo') {
+        initUfoEvent();
+    }
+
     eventsThisRun++;
-    // Schedule next event (if still possible)
-    nextEventTime = gameTime - (15 + Math.random() * 20);
+    // Schedule next event from pre-scheduled times
+    if (scheduledEventTimes.length > 0) {
+        nextEventTime = scheduledEventTimes.shift();
+    }
 
     // Play a subtle notification sound
     playTone(350, 0.15, 'sine', 0.08);
     setTimeout(() => playTone(450, 0.12, 'sine', 0.06), 100);
+}
+
+// ============== UFO EVENT ==============
+function initUfoEvent() {
+    // Find all occupied poster slots
+    const occupied = [];
+    lampPosts.forEach((lp, pi) => {
+        lp.slots.forEach((s, si) => {
+            if (s !== null) occupied.push({ postIndex: pi, slotIndex: si, partyIndex: s });
+        });
+    });
+
+    if (occupied.length === 0) {
+        // No posters to steal — downgrade to wind event
+        activeEvent.id = 'wind';
+        activeEvent.text = 'Vindstød!';
+        activeEvent.icon = '💨';
+        activeEvent.duration = 4;
+        activeEvent.timer = 4;
+        return;
+    }
+
+    const target = occupied[Math.floor(Math.random() * occupied.length)];
+    const post = lampPosts[target.postIndex];
+    activeEvent.postIndex = target.postIndex;
+    activeEvent.slotIndex = target.slotIndex;
+    activeEvent.stolenParty = target.partyIndex;
+    activeEvent.ufoPhase = 'descend'; // descend → grab → ascend
+    activeEvent.ufoX = post.worldX;
+    activeEvent.ufoY = -80; // start above screen
+    activeEvent.grabY = bridgeY() - post.slotHeights[target.slotIndex] - 10;
+    activeEvent.posterGrabbed = false;
+
+    // UFO descend sound — eerie
+    playTone(200, 0.3, 'sine', 0.1);
+    setTimeout(() => playTone(250, 0.3, 'sine', 0.08), 150);
+    setTimeout(() => playTone(180, 0.4, 'sine', 0.06), 300);
+}
+
+function updateUfoEvent(dt) {
+    if (!activeEvent || activeEvent.id !== 'ufo') return;
+
+    const speed = 120; // pixels per second
+    if (activeEvent.ufoPhase === 'descend') {
+        activeEvent.ufoY += speed * dt;
+        if (activeEvent.ufoY >= activeEvent.grabY) {
+            activeEvent.ufoY = activeEvent.grabY;
+            activeEvent.ufoPhase = 'grab';
+            // Actually steal the poster
+            const post = lampPosts[activeEvent.postIndex];
+            post.slots[activeEvent.slotIndex] = null;
+            activeEvent.posterGrabbed = true;
+            // Grab sound
+            playTone(600, 0.1, 'square', 0.1);
+            setTimeout(() => playTone(800, 0.1, 'square', 0.08), 80);
+        }
+    } else if (activeEvent.ufoPhase === 'grab') {
+        // Brief pause at grab point, then ascend
+        activeEvent.ufoPhase = 'ascend';
+    } else if (activeEvent.ufoPhase === 'ascend') {
+        activeEvent.ufoY -= speed * 1.5 * dt;
+    }
+}
+
+function drawUfoEvent() {
+    if (!activeEvent || activeEvent.id !== 'ufo') return;
+
+    const sx = wx(activeEvent.ufoX);
+    const uy = activeEvent.ufoY;
+    const by = bridgeY();
+
+    if (sx < -150 || sx > logicalWidth + 150) return;
+
+    // Tractor beam (from UFO down to target poster)
+    if (activeEvent.ufoPhase === 'descend' || activeEvent.ufoPhase === 'grab') {
+        const beamBottom = by - lampPosts[activeEvent.postIndex].slotHeights[activeEvent.slotIndex];
+        const beamGrad = ctx.createLinearGradient(0, uy + 10, 0, beamBottom);
+        beamGrad.addColorStop(0, 'rgba(120, 255, 120, 0.35)');
+        beamGrad.addColorStop(0.5, 'rgba(120, 255, 120, 0.15)');
+        beamGrad.addColorStop(1, 'rgba(120, 255, 120, 0.05)');
+        ctx.fillStyle = beamGrad;
+        ctx.beginPath();
+        ctx.moveTo(sx - 6, uy + 10);
+        ctx.lineTo(sx - 18, beamBottom);
+        ctx.lineTo(sx + 18, beamBottom);
+        ctx.lineTo(sx + 6, uy + 10);
+        ctx.closePath();
+        ctx.fill();
+
+        // Beam sparkles
+        const t = performance.now() * 0.005;
+        ctx.fillStyle = 'rgba(180, 255, 180, 0.6)';
+        for (let i = 0; i < 5; i++) {
+            const sparkY = uy + 15 + ((t * 40 + i * 50) % (beamBottom - uy - 15));
+            const sparkX = sx + Math.sin(t + i * 2) * 8;
+            ctx.beginPath();
+            ctx.arc(sparkX, sparkY, 1.5, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+
+    // UFO body — classic flying saucer
+    ctx.save();
+    const wobble = Math.sin(performance.now() * 0.004) * 2;
+
+    // Dome (glass top)
+    const domeGrad = ctx.createRadialGradient(sx, uy - 6 + wobble, 2, sx, uy - 4 + wobble, 10);
+    domeGrad.addColorStop(0, 'rgba(200, 255, 200, 0.8)');
+    domeGrad.addColorStop(1, 'rgba(100, 200, 100, 0.3)');
+    ctx.fillStyle = domeGrad;
+    ctx.beginPath();
+    ctx.ellipse(sx, uy - 4 + wobble, 10, 8, 0, Math.PI, 0);
+    ctx.fill();
+
+    // Main disc body
+    const discGrad = ctx.createLinearGradient(sx - 22, uy + wobble, sx + 22, uy + wobble);
+    discGrad.addColorStop(0, '#888');
+    discGrad.addColorStop(0.3, '#CCC');
+    discGrad.addColorStop(0.5, '#EEE');
+    discGrad.addColorStop(0.7, '#CCC');
+    discGrad.addColorStop(1, '#888');
+    ctx.fillStyle = discGrad;
+    ctx.beginPath();
+    ctx.ellipse(sx, uy + 2 + wobble, 22, 7, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Disc rim highlight
+    ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.ellipse(sx, uy + 1 + wobble, 21, 5, 0, Math.PI + 0.3, Math.PI * 2 - 0.3);
+    ctx.stroke();
+
+    // Blinking lights around rim
+    const lightCount = 6;
+    for (let i = 0; i < lightCount; i++) {
+        const angle = (i / lightCount) * Math.PI * 2 + performance.now() * 0.003;
+        const lx = sx + Math.cos(angle) * 18;
+        const ly = uy + 2 + wobble + Math.sin(angle) * 4;
+        const brightness = Math.sin(performance.now() * 0.01 + i * 1.2) > 0;
+        ctx.fillStyle = brightness ? '#0F0' : '#0A0';
+        ctx.beginPath();
+        ctx.arc(lx, ly, 2, 0, Math.PI * 2);
+        ctx.fill();
+        if (brightness) {
+            ctx.fillStyle = 'rgba(0, 255, 0, 0.3)';
+            ctx.beginPath();
+            ctx.arc(lx, ly, 4, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+
+    // Bottom glow
+    ctx.fillStyle = 'rgba(120, 255, 120, 0.2)';
+    ctx.beginPath();
+    ctx.ellipse(sx, uy + 8 + wobble, 12, 4, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // If poster grabbed, draw it dangling below UFO
+    if (activeEvent.posterGrabbed && activeEvent.stolenParty !== null) {
+        const party = PARTIES[activeEvent.stolenParty];
+        const posterY = uy + 14 + wobble;
+        // Poster rectangle
+        ctx.fillStyle = party.bg;
+        ctx.fillRect(sx - 6, posterY, 12, 16);
+        ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+        ctx.lineWidth = 0.5;
+        ctx.strokeRect(sx - 6, posterY, 12, 16);
+        // Party letter
+        ctx.fillStyle = party.text;
+        ctx.font = 'bold 9px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(party.letter, sx, posterY + 8);
+    }
+
+    ctx.restore();
 }
 
 function isEventActive(eventId) {
@@ -2185,7 +2868,7 @@ function isPlacingBlockedByPolice() {
 
 function drawSpiceEventBanner() {
     if (!activeEvent) return;
-    const cx = canvas.width / 2;
+    const cx = logicalWidth / 2;
     const progress = activeEvent.timer / activeEvent.duration;
     const by = bridgeY();
 
@@ -2195,7 +2878,7 @@ function drawSpiceEventBanner() {
         // Draw a tourist standing at the blocked lamp post
         const post = lampPosts[activeEvent.postIndex];
         const sx = wx(post.worldX);
-        if (sx > -100 && sx < canvas.width + 100) {
+        if (sx > -100 && sx < logicalWidth + 100) {
             const ty = by - 2;
             // Tourist body (bright tourist clothes)
             ctx.fillStyle = '#E8C840'; // yellow jacket
@@ -2263,7 +2946,7 @@ function drawSpiceEventBanner() {
         const t = performance.now() * 0.003;
         for (let i = 0; i < 8; i++) {
             const wy = 80 + i * 50 + Math.sin(t + i) * 20;
-            const wxStart = (t * 200 + i * 170) % (canvas.width + 200) - 100;
+            const wxStart = (t * 200 + i * 170) % (logicalWidth + 200) - 100;
             ctx.beginPath();
             ctx.moveTo(wxStart, wy);
             ctx.quadraticCurveTo(wxStart + 40, wy - 8, wxStart + 80, wy);
@@ -2271,6 +2954,10 @@ function drawSpiceEventBanner() {
             ctx.stroke();
         }
         ctx.restore();
+    }
+
+    if (activeEvent.id === 'ufo') {
+        drawUfoEvent();
     }
 
     // === Banner overlay ===
@@ -2326,7 +3013,7 @@ function gameLoop(ts) {
 }
 
 function draw() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.clearRect(0, 0, logicalWidth, logicalHeight);
     drawWorld();
 
     // Draw all entities sorted by worldX for overlap
@@ -2349,10 +3036,10 @@ function draw() {
         ctx.globalAlpha = Math.min(1, climbHintTimer / 0.5);
         ctx.fillStyle = 'rgba(0,0,0,0.75)';
         const hintW = 260, hintH = 36;
-        const hx = canvas.width / 2 - hintW / 2, hy = canvas.height * 0.25;
+        const hx = logicalWidth / 2 - hintW / 2, hy = logicalHeight * 0.25;
         roundRect(ctx, hx, hy, hintW, hintH, 8); ctx.fill();
         ctx.fillStyle = '#fff'; ctx.font = 'bold 13px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillText('Hold ↓ for at kravle ned sikkert', canvas.width / 2, hy + hintH / 2);
+        ctx.fillText('Hold ↓ for at kravle ned sikkert', logicalWidth / 2, hy + hintH / 2);
         ctx.globalAlpha = 1;
     }
 
@@ -2361,13 +3048,13 @@ function draw() {
         const prog = removeWarningTimer / 1.5;
         // Red glow on screen edges
         ctx.fillStyle = `rgba(231,76,60,${0.15 + prog * 0.2})`;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillRect(0, 0, logicalWidth, logicalHeight);
         // Warning text
         ctx.fillStyle = '#e74c3c'; ctx.font = 'bold 16px Arial'; ctx.textAlign = 'center';
-        ctx.fillText('Tryk [R] for at rive ned (taber spillet)', canvas.width / 2, canvas.height * 0.20);
+        ctx.fillText('Tryk [R] for at rive ned (taber spillet)', logicalWidth / 2, logicalHeight * 0.20);
         // Progress bar
-        ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(canvas.width/2 - 80, canvas.height * 0.20 + 14, 160, 6);
-        ctx.fillStyle = '#e74c3c'; ctx.fillRect(canvas.width/2 - 80, canvas.height * 0.20 + 14, 160 * prog, 6);
+        ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(logicalWidth/2 - 80, logicalHeight * 0.20 + 14, 160, 6);
+        ctx.fillStyle = '#e74c3c'; ctx.fillRect(logicalWidth/2 - 80, logicalHeight * 0.20 + 14, 160 * prog, 6);
     }
 
     // Spice event banner
@@ -2376,15 +3063,15 @@ function draw() {
     // Global warm light overlay (dusk atmosphere)
     ctx.globalAlpha = 0.04;
     ctx.fillStyle = '#FFD080';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillRect(0, 0, logicalWidth, logicalHeight);
     ctx.globalAlpha = 1;
 
     // Subtle vignette
-    const vigGrad = ctx.createRadialGradient(canvas.width/2, canvas.height/2, canvas.height*0.4, canvas.width/2, canvas.height/2, canvas.height*0.9);
+    const vigGrad = ctx.createRadialGradient(logicalWidth/2, logicalHeight/2, logicalHeight*0.4, logicalWidth/2, logicalHeight/2, logicalHeight*0.9);
     vigGrad.addColorStop(0, 'rgba(0,0,0,0)');
     vigGrad.addColorStop(1, 'rgba(0,0,0,0.15)');
     ctx.fillStyle = vigGrad;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillRect(0, 0, logicalWidth, logicalHeight);
 
     // Proximity hint
     if (player.state === 'idle' || player.state === 'running') {
@@ -2423,7 +3110,16 @@ function setupInput() {
 function setupCanvas() {
     canvas = document.getElementById('game-canvas');
     ctx = canvas.getContext('2d');
-    function resize() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
+    function resize() {
+        const dpr = window.devicePixelRatio || 1;
+        logicalWidth = window.innerWidth;
+        logicalHeight = window.innerHeight;
+        canvas.width = logicalWidth * dpr;
+        canvas.height = logicalHeight * dpr;
+        canvas.style.width = logicalWidth + 'px';
+        canvas.style.height = logicalHeight + 'px';
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
     resize();
     window.addEventListener('resize', resize);
 }
@@ -2436,6 +3132,10 @@ function setupUI() {
     document.getElementById('results-restart').addEventListener('click', resetToMenu);
     document.getElementById('results-screenshot').addEventListener('click', downloadScreenshot);
     document.getElementById('results-share').addEventListener('click', shareResult);
+    // Start menu music on first interaction (AudioContext policy)
+    document.getElementById('menu-screen').addEventListener('click', () => {
+        if (!menuMusicNodes && gameState === GameState.MENU) startMenuMusic();
+    });
 }
 
 function resetToMenu() {
@@ -2448,7 +3148,19 @@ function resetToMenu() {
     document.getElementById('start-btn').disabled = true;
     document.getElementById('selected-party-text').textContent = '';
     keys = {};
+    initMenuEntities();
     startMenuAnimation();
+    startMenuMusic(); // AudioContext already unlocked from previous interaction
+    // Re-trigger CSS entrance animations
+    const content = document.querySelector('.menu-content');
+    content.style.animation = 'none';
+    content.offsetHeight; // force reflow
+    content.style.animation = '';
+    // Re-trigger individual element animations
+    ['.game-subtitle', '.menu-instruction', '.party-grid', '.start-btn'].forEach(sel => {
+        const el = document.querySelector(sel);
+        if (el) { el.style.animation = 'none'; el.offsetHeight; el.style.animation = ''; }
+    });
 }
 
 // ============== BOOT ==============
