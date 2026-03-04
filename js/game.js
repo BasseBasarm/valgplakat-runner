@@ -3157,4 +3157,8 @@ function resetToMenu() {
 }
 
 // ============== BOOT ==============
-window.addEventListener('DOMContentLoaded', () => { setupCanvas(); setupMenuCanvas(); setupInput(); setupUI(); startMenuAnimation(); });
+window.addEventListener('DOMContentLoaded', () => {
+    setupCanvas(); setupMenuCanvas(); setupInput(); setupUI(); startMenuAnimation();
+    // Try starting music immediately (works if AudioContext already unlocked)
+    try { startMenuMusic(); } catch(e) {}
+});
